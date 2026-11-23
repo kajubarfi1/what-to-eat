@@ -1,0 +1,6 @@
+{
+  "_note": "Manual stand-in for Beli data (Beli has no public API). Add restaurant names you or friends rate highly; matches get a ranking boost. Optional score is 0-1.",
+  "picks": [
+    { "name": "Example Ramen House", "score": 1 }
+  ]
+}
