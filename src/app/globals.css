@@ -244,3 +244,9 @@ a.go.linklike:hover { color: #fff; }
 .food-row .doodle { width: 48px; height: 48px; color: var(--primary-deep); }
 .food-row .doodle:nth-child(3n + 2) { --doodle-blob: var(--primary-tint); }
 .food-row .doodle:nth-child(3n) { --doodle-blob: var(--sage-tint); }
+
+/* typed-location fallback */
+.locate { margin-top: 18px; }
+.locate label { margin: 0 0 2px; }
+.locate .datetime { margin-top: 8px; }
+.locate .meta { margin: 10px 2px 0; line-height: 1.45; }

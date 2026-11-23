@@ -25,10 +25,36 @@ type Item = { who: "shared" | 0 | 1; step: Step } | { who: "handoff" };
 type Stage = "mode" | "questions" | "processing" | "bracket";
 type Phase = "locating" | "searching" | "seeding";
 
+/** The browser couldn't (or wouldn't) say where the device is. The screen offers typing a location instead. */
+class LocationError extends Error {}
+
+type Coords = { lat: number; lng: number };
+
+function getPosition(): Promise<Coords> {
+  return new Promise((resolve, reject) => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      reject(new LocationError("This browser can't share your location."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) =>
+        reject(
+          new LocationError(
+            err.code === 1
+              ? "Location access is blocked for this site."
+              : err.code === 3
+                ? "Finding your location took too long."
+                : "We couldn't work out where you are.",
+          ),
+        ),
+      // Without a timeout, some phones never answer and the screen would wait forever.
+      { enableHighAccuracy: false, timeout: 12000, maximumAge: 5 * 60 * 1000 },
+    );
+  });
+}
+
 function errorMessage(e: unknown): string {
-  if (typeof GeolocationPositionError !== "undefined" && e instanceof GeolocationPositionError) {
-    return "We couldn't get your location. Allow location access for this site, then try again.";
-  }
   if (e instanceof Error) return e.message;
   return "Something went wrong";
 }
@@ -41,6 +67,10 @@ export default function Home() {
   const [people, setPeople] = useState<PersonAnswers[]>([EMPTY_PERSON, EMPTY_PERSON]);
   const [phase, setPhase] = useState<Phase>("locating");
   const [error, setError] = useState<string | null>(null);
+  const [needLocation, setNeedLocation] = useState(false);
+  const [manualLoc, setManualLoc] = useState<Coords | null>(null);
+  const [address, setAddress] = useState("");
+  const [lookingUp, setLookingUp] = useState(false);
   const [topDirections, setTopDirections] = useState<string[]>([]);
   const [results, setResults] = useState<Restaurant[]>([]);
   const [bracket, setBracket] = useState<Bracket | null>(null);
@@ -104,10 +134,11 @@ export default function Home() {
   }
 
   /** Processing screen: score cuisines, search Google, then seed the bracket. */
-  async function runSearch() {
+  async function runSearch(override?: Coords) {
     const directions = pickDirections();
     setTopDirections(directions);
     setError(null);
+    setNeedLocation(false);
     setPhase("locating");
     setStage("processing");
 
@@ -121,9 +152,7 @@ export default function Home() {
     }
 
     try {
-      const pos = await new Promise<GeolocationPosition>((resolve, reject) =>
-        navigator.geolocation.getCurrentPosition(resolve, reject),
-      );
+      const location = override ?? manualLoc ?? (await getPosition());
       setPhase("searching");
       const res = await fetch("/api/recommend", {
         method: "POST",
@@ -134,7 +163,7 @@ export default function Home() {
           vibes,
           shared: norm,
           dietary,
-          location: { lat: pos.coords.latitude, lng: pos.coords.longitude },
+          location,
         }),
       });
       const data = await res.json();
@@ -154,7 +183,29 @@ export default function Home() {
       setBracket(createBracket(found));
       setStage("bracket");
     } catch (e) {
+      if (e instanceof LocationError) setNeedLocation(true);
       setError(errorMessage(e));
+    }
+  }
+
+  /** Fallback when the device location isn't available: look up what the person typed. */
+  async function useTypedLocation() {
+    setLookingUp(true);
+    try {
+      const res = await fetch("/api/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: address }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Couldn't look that up.");
+      const loc = { lat: data.lat, lng: data.lng };
+      setManualLoc(loc);
+      await runSearch(loc);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setLookingUp(false);
     }
   }
 
@@ -165,6 +216,9 @@ export default function Home() {
     setResults([]);
     setBracket(null);
     setError(null);
+    setNeedLocation(false);
+    setManualLoc(null);
+    setAddress("");
   }
 
   // ---------- screens ----------
@@ -267,7 +321,27 @@ export default function Home() {
         {error ? (
           <>
             <div className="error">{error}</div>
-            <button className="go" onClick={() => void runSearch()}>Try again</button>
+            {needLocation && (
+              <div className="locate">
+                <label htmlFor="address">Or type where you are</label>
+                <input
+                  id="address"
+                  className="datetime"
+                  placeholder="Neighborhood, ZIP code or address"
+                  value={address}
+                  onChange={(e) => setAddress(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && address.trim() && void useTypedLocation()}
+                />
+                <button className="go" onClick={() => void useTypedLocation()} disabled={lookingUp || address.trim().length < 3}>
+                  {lookingUp ? "Looking it up…" : "Search from here"}
+                </button>
+                <p className="meta">
+                  To use your real location instead: iPhone Settings, then Privacy &amp; Security, then Location Services,
+                  and set your browser to &quot;While Using the App&quot;. Then tap Try again.
+                </p>
+              </div>
+            )}
+            <button className={needLocation ? "go alt" : "go"} onClick={() => void runSearch()}>Try again</button>
             <button className="go alt" onClick={() => { setIndex(sequence.length - 1); setStage("questions"); }}>
               ← Back to questions
             </button>
